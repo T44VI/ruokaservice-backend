@@ -1,0 +1,315 @@
+service:
+  name: ruokalaskuri
+# app and org for use with dashboard.serverless.com
+#app: your-app-name
+#org: your-org-name
+
+custom:
+  webpack:
+    webpackConfig: ./webpack.config.js
+    includeModules: true
+
+# Add the serverless-webpack plugin
+plugins:
+  - serverless-dotenv-plugin
+  - serverless-webpack
+
+provider:
+  name: aws
+  runtime: nodejs12.x
+  stage: ${opt:stage, 'dev'}
+  profile: aalto
+  region: ${opt:region, 'eu-north-1'}
+  memory: 128
+  apiGateway:
+    minimumCompressionSize: 1024 # Enable gzip compression for responses > 1 KB
+  environment:
+    AWS_NODEJS_CONNECTION_REUSE_ENABLED: 1
+    USER_TABLE: "ruokalaskuri-${opt:stage, self:provider.stage}-user-table"
+    PRICE_TABLE: "ruokalaskuri-${opt:stage, self:provider.stage}-price-table"
+    REGS_TABLE: "ruokalaskuri-${opt:stage, self:provider.stage}-regs-table"
+    PAYMENTS_TABLE: "ruokalaskuri-${opt:stage, self:provider.stage}-payments-table"
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - dynamodb:Query
+        - dynamodb:Scan
+        - dynamodb:GetItem
+        - dynamodb:PutItem
+        - dynamodb:UpdateItem
+      Resource: "*"
+
+functions:
+  price-add:
+    handler: handler.addPrice
+    events:
+      - http:
+          method: post
+          path: prices/add
+          authorizer:
+            name: adminAuthFunc
+            resultTtlInSeconds: 0
+          cors:
+            origin: "*"
+            allowCredentials: true
+  price-get-by-year:
+    handler: handler.getPricesByYear
+    events:
+      - http:
+          method: get
+          path: prices/getByYear/{year}
+          authorizer:
+            name: authFunc
+            resultTtlInSeconds: 0
+          cors:
+            origin: "*"
+            allowCredentials: true
+  user-add:
+    handler: handler.addUser
+    events:
+      - http:
+          method: post
+          path: user/add
+          authorizer:
+            name: authFunc
+            resultTtlInSeconds: 0
+          cors:
+            origin: "*"
+            allowCredentials: true
+  user-get-all:
+    handler: handler.getAllUsers
+    events:
+      - http:
+          method: get
+          path: user/getAll
+          authorizer:
+            name: authFunc
+            resultTtlInSeconds: 0
+          cors:
+            origin: "*"
+            allowCredentials: true
+  user-get-by-id:
+    handler: handler.getUserById
+    events:
+      - http:
+          method: get
+          path: user/getById/{id}
+          authorizer:
+            name: authFunc
+            resultTtlInSeconds: 0
+          cors:
+            origin: "*"
+            allowCredentials: true
+  user-add-allergy:
+    handler: handler.addUserAllergy
+    events:
+      - http:
+          method: post
+          path: user/addAllergy
+          authorizer:
+            name: authFunc
+            resultTtlInSeconds: 0
+          cors:
+            origin: "*"
+            allowCredentials: true
+  regs-save-day:
+    handler: handler.saveDay
+    events:
+      - http:
+          method: post
+          path: regs/saveDay
+          authorizer:
+            name: authFunc
+            resultTtlInSeconds: 0
+          cors:
+            origin: "*"
+            allowCredentials: true
+  regs-get-by-user:
+    handler: handler.getMonthByUserId
+    events:
+      - http:
+          method: post
+          path: regs/getMonthByUser
+          authorizer:
+            name: authFunc
+            resultTtlInSeconds: 0
+          cors:
+            origin: "*"
+            allowCredentials: true
+  regs-get-kitchen-day:
+    handler: handler.getKitchenDay
+    events:
+      - http:
+          method: post
+          path: regs/getKitchenDay
+          authorizer:
+            name: authFunc
+            resultTtlInSeconds: 0
+          cors:
+            origin: "*"
+            allowCredentials: true
+  payments-get-by-year:
+    handler: handler.getPaymentsByYear
+    events:
+      - http:
+          method: post
+          path: payments/getPaymentsByYear
+          authorizer:
+            name: authFunc
+            resultTtlInSeconds: 0
+          cors:
+            origin: "*"
+            allowCredentials: true
+  payments-save:
+    handler: handler.savePayment
+    events:
+      - http:
+          method: post
+          path: payments/save
+          authorizer:
+            name: authFunc
+            resultTtlInSeconds: 0
+          cors:
+            origin: "*"
+            allowCredentials: true
+  adminAuthFunc:
+    handler: auth.allowAdmin
+  authFunc:
+    handler: auth.allowAll
+
+resources:
+  Resources:
+    GatewayResponseDefault4XX:
+      Type: "AWS::ApiGateway::GatewayResponse"
+      Properties:
+        ResponseParameters:
+          gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+          gatewayresponse.header.Access-Control-Allow-Headers: "'*'"
+        ResponseType: DEFAULT_4XX
+        RestApiId:
+          Ref: "ApiGatewayRestApi"
+    UserDynamoDbTable:
+      Type: "AWS::DynamoDB::Table"
+      DeletionPolicy: Retain
+      Properties:
+        AttributeDefinitions:
+          - AttributeName: "id"
+            AttributeType: "S"
+        KeySchema:
+          - AttributeName: "id"
+            KeyType: "HASH"
+        ProvisionedThroughput:
+          ReadCapacityUnits: 1
+          WriteCapacityUnits: 1
+        StreamSpecification:
+          StreamViewType: "NEW_AND_OLD_IMAGES"
+        TableName: ${self:provider.environment.USER_TABLE}
+    PriceDynamoDbTable:
+      Type: "AWS::DynamoDB::Table"
+      DeletionPolicy: Retain
+      Properties:
+        AttributeDefinitions:
+          - AttributeName: "id"
+            AttributeType: "S"
+          - AttributeName: "year"
+            AttributeType: "N"
+          - AttributeName: "start"
+            AttributeType: "S"
+        KeySchema:
+          - AttributeName: "id"
+            KeyType: "HASH"
+        GlobalSecondaryIndexes:
+          - IndexName: YearIndex
+            KeySchema:
+              - AttributeName: "year"
+                KeyType: "HASH"
+              - AttributeName: "start"
+                KeyType: "RANGE"
+            Projection:
+              ProjectionType: "ALL"
+            ProvisionedThroughput:
+              ReadCapacityUnits: 1
+              WriteCapacityUnits: 1
+        ProvisionedThroughput:
+          ReadCapacityUnits: 1
+          WriteCapacityUnits: 1
+        StreamSpecification:
+          StreamViewType: "NEW_AND_OLD_IMAGES"
+        TableName: ${self:provider.environment.PRICE_TABLE}
+    RegsDynamoDbTable:
+      Type: "AWS::DynamoDB::Table"
+      DeletionPolicy: Retain
+      Properties:
+        AttributeDefinitions:
+          - AttributeName: "userId-year-month-day"
+            AttributeType: "S"
+          - AttributeName: "userId-year-month"
+            AttributeType: "S"
+          - AttributeName: "year-month"
+            AttributeType: "S"
+          - AttributeName: "day"
+            AttributeType: "N"
+        KeySchema:
+          - AttributeName: "userId-year-month-day"
+            KeyType: "HASH"
+        GlobalSecondaryIndexes:
+          - IndexName: UserMonthIndex
+            KeySchema:
+              - AttributeName: "userId-year-month"
+                KeyType: "HASH"
+              - AttributeName: "day"
+                KeyType: "RANGE"
+            Projection:
+              ProjectionType: "ALL"
+            ProvisionedThroughput:
+              ReadCapacityUnits: 1
+              WriteCapacityUnits: 1
+          - IndexName: MonthIndex
+            KeySchema:
+              - AttributeName: "year-month"
+                KeyType: "HASH"
+              - AttributeName: "day"
+                KeyType: "RANGE"
+            Projection:
+              ProjectionType: "ALL"
+            ProvisionedThroughput:
+              ReadCapacityUnits: 1
+              WriteCapacityUnits: 1
+        ProvisionedThroughput:
+          ReadCapacityUnits: 1
+          WriteCapacityUnits: 1
+        StreamSpecification:
+          StreamViewType: "NEW_AND_OLD_IMAGES"
+        TableName: ${self:provider.environment.REGS_TABLE}
+    PaymentsDynamoDbTable:
+      Type: "AWS::DynamoDB::Table"
+      DeletionPolicy: Retain
+      Properties:
+        AttributeDefinitions:
+          - AttributeName: "id"
+            AttributeType: "S"
+          - AttributeName: "user-query-key"
+            AttributeType: "S"
+          - AttributeName: "date"
+            AttributeType: "S"
+        KeySchema:
+          - AttributeName: "id"
+            KeyType: "HASH"
+        GlobalSecondaryIndexes:
+          - IndexName: UserQueryIndex
+            KeySchema:
+              - AttributeName: "user-query-key"
+                KeyType: "HASH"
+              - AttributeName: "date"
+                KeyType: "RANGE"
+            Projection:
+              ProjectionType: "ALL"
+            ProvisionedThroughput:
+              ReadCapacityUnits: 1
+              WriteCapacityUnits: 1
+        ProvisionedThroughput:
+          ReadCapacityUnits: 1
+          WriteCapacityUnits: 1
+        StreamSpecification:
+          StreamViewType: "NEW_AND_OLD_IMAGES"
+        TableName: ${self:provider.environment.PAYMENTS_TABLE}
