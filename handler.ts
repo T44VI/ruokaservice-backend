@@ -1,6 +1,7 @@
 import { APIGatewayProxyHandler, APIGatewayProxyResult } from "aws-lambda";
 import { DynamoDB } from "aws-sdk";
 import { v4 as uuid } from "uuid";
+import _ from "lodash";
 import "source-map-support/register";
 
 const dynamoDB = new DynamoDB.DocumentClient();
@@ -122,6 +123,13 @@ type TMonth = {
   allDays: { num: number; count: number }[];
 };
 
+type RealTMonth = {
+  year: number;
+  month: number;
+  ts: number;
+  days: Day[];
+};
+
 type Day = {
   num: number;
   lunch?: Food;
@@ -165,6 +173,23 @@ const monthNames = [
   "Marraskuu",
   "Joulukuu",
 ];
+
+const getMonthYearPairs = (
+  start: string,
+  end: string
+): { year: number; month: number }[] => {
+  const sps = start.split("-").map((s: string): number => Number(s));
+  const spe = end.split("-").map((s: string): number => Number(s));
+  const res: { year: number; month: number }[] = [];
+  const diff = (spe[0] - sps[0]) * 12 + (spe[1] - sps[1]);
+  for (let i = -1; i < diff; i++) {
+    res.push({
+      year: sps[0] + Math.floor((i + sps[1]) / 12),
+      month: (sps[1] + i) % 12,
+    });
+  }
+  return res;
+};
 
 const genRes = (
   code: number,
@@ -442,7 +467,26 @@ const regs = {
       },
     };
   },
-  getByUserIdAndYear(userId: string, year: number) {},
+  async getByYearAndMonth(year: number, month: number): Promise<DBDay[]> {
+    const params = {
+      TableName: this._private.table,
+      IndexName: "MonthIndex",
+      KeyConditionExpression: "#y = :month",
+      ExpressionAttributeValues: {
+        ":month": `${year}-${month}`,
+      },
+      ExpressionAttributeNames: {
+        "#y": "year-month",
+      },
+    };
+    try {
+      const res = await dynamoDB.query(params).promise();
+      return res.Items.map((item: DBDay): DBDay => ({ ...item }));
+    } catch (e) {
+      console.log(e);
+      return [];
+    }
+  },
   async getByUserIdAndYearAndMonth(
     userId: string,
     year: number,
@@ -716,20 +760,13 @@ const paymentUpdates = {
       )
     );
   },
-  async updateMonthByUserId(
+  async privMonthUpdate(
     userId: string,
     year: number,
-    month: number
-  ): Promise<any> {
-    const [curPrices, curRegs] = await Promise.all([
-      price.getByYear(year),
-      regs.getByUserIdAndYearAndMonth(userId, year, month),
-    ]);
-    const relPrices = curPrices.filter(
-      (p) =>
-        p.start < `${year}-${month + 2 < 10 ? `0${month + 2}` : month + 2}` &&
-        p.end > `${year}-${month + 1 < 10 ? `0${month + 1}` : month + 1}`
-    );
+    month: number,
+    relPrices: Price[],
+    curRegs: RealTMonth
+  ) {
     const getPriceByFood = (
       food: Food,
       day: number,
@@ -808,7 +845,7 @@ const paymentUpdates = {
         (d.dinner ? getPriceByFood(d.dinner, d.num, "dinner") : 0),
       0
     );
-    await payments.save(
+    return payments.save(
       payments.create.month(
         month,
         year,
@@ -817,7 +854,74 @@ const paymentUpdates = {
         `${monthNames[month] || "Error"} ${year}`
       )
     );
+  },
+  async updateMonthByUserId(
+    userId: string,
+    year: number,
+    month: number
+  ): Promise<any> {
+    const [curPrices, curRegs] = await Promise.all([
+      price.getByYear(year),
+      regs.getByUserIdAndYearAndMonth(userId, year, month),
+    ]);
+    const relPrices = curPrices.filter(
+      (p) =>
+        p.start < `${year}-${month + 2 < 10 ? `0${month + 2}` : month + 2}` &&
+        p.end > `${year}-${month + 1 < 10 ? `0${month + 1}` : month + 1}`
+    );
+    await paymentUpdates.privMonthUpdate(
+      userId,
+      year,
+      month,
+      relPrices,
+      curRegs
+    );
+
     return paymentUpdates.updateYearByUserId(userId, year);
+  },
+  async updateMonthsByMonth(year: number, month: number) {
+    const [curPrices, curRegs] = await Promise.all([
+      price.getByYear(year),
+      regs.getByYearAndMonth(year, month),
+    ]);
+    const relPrices = curPrices.filter(
+      (p) =>
+        p.start < `${year}-${month + 2 < 10 ? `0${month + 2}` : month + 2}` &&
+        p.end > `${year}-${month + 1 < 10 ? `0${month + 1}` : month + 1}`
+    );
+    const relRegsObj = _.groupBy(curRegs, (dbu) => dbu.userId);
+    const relRegs = Object.keys(relRegsObj).map((key): {
+      userId: string;
+      regs: RealTMonth;
+    } => {
+      const cur = relRegsObj[key];
+      return {
+        userId: cur[0].userId,
+        regs: {
+          year,
+          month,
+          ts: 0,
+          days: cur.map((dbd) => ({
+            num: dbd.day,
+            lunch: dbd.lunch,
+            coffee: dbd.coffee,
+            dinner: dbd.dinner,
+          })),
+        },
+      };
+    });
+    return Promise.all(
+      relRegs.map(async (r) => {
+        await paymentUpdates.privMonthUpdate(
+          r.userId,
+          year,
+          month,
+          relPrices,
+          r.regs
+        );
+        return paymentUpdates.updateYearByUserId(r.userId, year);
+      })
+    );
   },
 };
 
@@ -923,6 +1027,12 @@ export const addPrice: APIGatewayProxyHandler = async (event, _context) => {
               time,
               name
             )
+      )
+    );
+
+    await Promise.all(
+      getMonthYearPairs(start, end).map((el) =>
+        paymentUpdates.updateMonthsByMonth(el.year, el.month)
       )
     );
 
