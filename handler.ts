@@ -37,6 +37,7 @@ type Price = {
   start: string;
   end: string;
   normal: number;
+  discount: number;
   young: number;
   child: number;
   special: boolean;
@@ -139,6 +140,7 @@ type Day = {
 
 type Food = {
   normal?: number;
+  discount?: number;
   young?: number;
   child?: number;
   specialIds?: SpecialFoodWithId[];
@@ -147,14 +149,14 @@ type Food = {
 
 type SpecialFoodWithId = {
   specialId: string;
-  base: "normal" | "young" | "child";
+  base: "normal" | "discount" | "young" | "child";
   count: number;
   allergies: string[];
   name: string;
 };
 
 type SpecialFood = {
-  base: "normal" | "young" | "child";
+  base: "normal" | "discount" | "young" | "child";
   count: number;
   allergies: string[];
 };
@@ -360,6 +362,7 @@ const price = {
     start: string,
     end: string,
     normal: number,
+    discount: number,
     young: number,
     child: number,
     special: boolean,
@@ -373,6 +376,7 @@ const price = {
       start,
       end,
       normal,
+      discount,
       young,
       child,
       special,
@@ -401,6 +405,7 @@ const price = {
           start,
           end,
           normal,
+          discount,
           young,
           child,
           special,
@@ -413,6 +418,7 @@ const price = {
           start,
           end,
           normal,
+          discount,
           young,
           child,
           special,
@@ -441,6 +447,7 @@ const regs = {
   createFromDay(day: Day, userId: string, year: number, month: number): DBDay {
     const countFromFood = (food: Food): number =>
       (food.normal ? food.normal : 0) +
+      (food.discount ? food.discount : 0) +
       (food.young ? food.young : 0) +
       (food.child ? food.child : 0) +
       (food.special && food.special.length > 0
@@ -787,6 +794,20 @@ const paymentUpdates = {
                 0
               )
             : 0),
+        discount:
+          (food.discount || 0) +
+          (food.special && food.special.length
+            ? food.special.reduce(
+                (acc, sf) => acc + (sf.base === "discount" ? sf.count : 0),
+                0
+              )
+            : 0) +
+          (food.specialIds && food.specialIds.length
+            ? food.specialIds.reduce(
+                (acc, sf) => acc + (sf.base === "discount" ? sf.count : 0),
+                0
+              )
+            : 0),
         young:
           (food.young || 0) +
           (food.special && food.special.length
@@ -829,6 +850,7 @@ const paymentUpdates = {
         console.log(today, amounts, rightPrice);
         return (
           amounts.normal * rightPrice.normal +
+          amounts.discount * rightPrice.discount +
           amounts.young * rightPrice.young +
           amounts.child * rightPrice.child
         );
@@ -1005,6 +1027,7 @@ export const addPrice: APIGatewayProxyHandler = async (event, _context) => {
       start,
       end,
       normal,
+      discount,
       young,
       child,
       special,
@@ -1021,6 +1044,7 @@ export const addPrice: APIGatewayProxyHandler = async (event, _context) => {
               start,
               end,
               normal,
+              discount,
               young,
               child,
               special,
@@ -1086,11 +1110,8 @@ export const getKitchenDay: APIGatewayProxyHandler = async (
   _context
 ) => {
   try {
-    const {
-      year,
-      month,
-      day,
-    }: { year: number; month: number; day: number } = JSON.parse(event.body);
+    const { year, month, day }: { year: number; month: number; day: number } =
+      JSON.parse(event.body);
 
     const res = await regs.getAllByDay(year, month, day);
 
@@ -1171,3 +1192,15 @@ export const savePayment: APIGatewayProxyHandler = async (event, _context) => {
     return fail(`Ilmon lisääminen epäonnistui`);
   }
 };
+/*
+export const createBackups: APIGatewayProxyHandler = async (
+  event,
+  _context
+) => {
+  try {
+    const year = Number(event.pathParameters.year);
+  } catch (e) {
+    console.log(e);
+    return fail(`Varmuuskopion luonti epäonnistui`);
+  }
+};*/
